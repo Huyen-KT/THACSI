@@ -75,8 +75,8 @@ td.act button{padding:2px 7px}
     <h2>1. Tải PDF lên</h2>
     <div id="drop">Kéo thả file PDF vào đây<br>hoặc bấm để chọn (nhiều file)</div>
     <input type="file" id="fileInput" accept="application/pdf" multiple hidden>
-    <label for="maxPages">Số trang tối đa cần quét mỗi file</label>
-    <input type="number" id="maxPages" min="1" max="200" value="10">
+    <label for="maxPages">Trang cần quét (VD: 1-10 hoặc 2-6,8)</label>
+    <input id="maxPages" value="1-10">
     <p class="small">PDF chỉ được đọc trên máy bạn, không tải lên server và không được lưu lại.</p>
     <div id="files"></div>
   </div>
@@ -191,10 +191,10 @@ function detectGroup(line){
   const f = t.join(" ").replace(/[:.,;]+$/, "");
   if (/\d/.test(f) || f.length > 60) return null;
   const tests = [
-    [/^(hoi dong quan tri|hdqt)$/, NHOM[0]],
-    [/^hoi dong thanh vien$/, NHOM[1]],
-    [/^(ban kiem soat|bks|kiem soat vien)$/, NHOM[2]],
-    [/^(ban (tong )?giam doc|ban dieu hanh|ban dieu hanh,? (va )?quan ly|ban (tong )?giam doc (va|,) ke toan truong|ban quan ly|ban dieu hanh (va|,) ke toan truong|ke toan truong)$/, NHOM[3]],
+    [/^((cac )?thanh vien )?(hoi dong quan tri|hdqt)( cong ty)?$/, NHOM[0]],
+    [/^((cac )?thanh vien )?hoi dong thanh vien( cong ty)?$/, NHOM[1]],
+    [/^((cac )?thanh vien )?(ban kiem soat|bks|kiem soat vien)( cong ty)?$/, NHOM[2]],
+    [/^(ban (tong )?giam doc|ban dieu hanh|ban dieu hanh,? (va )?quan ly|ban (tong )?giam doc (va|,) ke toan truong|ban quan ly|ban dieu hanh (va|,) ke toan truong|ke toan truong|ban tong giam doc va nguoi dai dien theo phap luat|ban giam doc va nguoi dai dien theo phap luat|ban tong giam doc va ban dieu hanh)$/, NHOM[3]],
   ];
   for (const [re, g] of tests) if (re.test(f)) return g;
   return null;
@@ -206,53 +206,97 @@ function normDate(d, m, y){
   return { text: String(d).padStart(2, "0") + "/" + String(m).padStart(2, "0") + "/" + y, ok };
 }
 
-// Phân tích 1 dòng bảng nhân sự. Trả về null nếu không phải dòng dữ liệu.
+// Phân tích 1 dòng nhân sự. Hỗ trợ: bảng có STT, dạng "Ông/Bà + tên + chức vụ", chức vụ đứng trước tên,
+// ngày ghi "15 tháng 3 năm 2008" / "15/03/2008", có hoặc không có chữ "Bổ nhiệm ngày / Miễn nhiệm ngày".
+const DISMISS_KW = /(mien nhiem|tu nhiem|thoi (giu|dam nhiem|lam)|het nhiem ky|nghi huu|den ngay)[^0-9]{0,25}$/;
+const APPOINT_KW = /(bo nhiem|bau|tu ngay|tai nhiem|duoc bo nhiem)[^0-9]{0,25}$/;
+const STOP_KW = /(bo nhiem|mien nhiem|tu nhiem|tu ngay|den ngay|thoi giu|het nhiem ky|tai nhiem|\(|\d)/;
+const HONOR_RE = /^(ông|bà|ong|ba|bả|bá|óng)\s+(?=\p{Lu})/iu;
+
+function nameRun(text){
+  // lấy chuỗi từ viết hoa liên tiếp ở đầu (họ tên), bỏ phần rác phía sau
+  const ws = text.trim().split(/\s+/).filter(Boolean);
+  while (ws.length && !/\p{L}{2}/u.test(ws[0])) ws.shift();
+  const out = [];
+  for (const w of ws){
+    const core = w.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, "");
+    if (!core || !/^\p{Lu}/u.test(core) || /\d/.test(w)) break;
+    out.push(core);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
 function parseRow(lineText){
   const line = clean(lineText);
   const f = fold(line);
-  if (/ho va ten|chuc vu|ngay bo nhiem/.test(f)) return null;
-  const hasNum = NUM_RE.test(line);
-  const pm = POS_RE.exec(f);
-  const dates = [...f.matchAll(DATE_RE)];
-  if (!pm && !(hasNum && dates.length)) return null;
-  if (!hasNum && !pm) return null;
-  if (!hasNum && !dates.length && !/(^|\s)[-–—.]\s*$/.test(line)) return null;
-
-  const notes = [];
-  const posStart = pm ? pm.index + pm[1].length : (dates.length ? dates[0].index : line.length);
-  let name = line.slice(0, posStart).replace(NUM_RE, "").replace(/[,.;:\-]+\s*$/, "").trim();
+  if (/ho va ten|ho ten|chuc vu|ngay bo nhiem|ngay mien nhiem/.test(f) && !/^\s*(ong|ba)\s/.test(f)) return null;
+  const numM = NUM_RE.exec(line);
+  let body = numM ? line.slice(numM[0].length) : line;
+  let off = line.length - body.length;
   let gender = "", genderSrc = "";
-  const g = /^(ông|bà)\s+/i.exec(name);
-  if (g){ gender = fold(g[1]) === "ong" ? "Nam" : "Nữ"; genderSrc = "report"; name = name.slice(g[0].length).trim(); }
+  const hm = HONOR_RE.exec(body);
+  if (hm){ gender = /^b/.test(fold(hm[1])) ? "Nữ" : "Nam"; genderSrc = "report"; off += hm[0].length; body = body.slice(hm[0].length); }
+  const fb = f.slice(off);
+  const pm = POS_RE.exec(fb);
+  const dates = [...fb.matchAll(DATE_RE)];
 
-  const firstDate = dates.length ? dates[0].index : line.length;
-  let position = "";
-  if (pm){
-    // chức vụ chuẩn hóa theo danh mục (sửa lỗi dấu của OCR) + phần đuôi ngắn nếu có
-    const end = posStart + pm[2].length;
-    let rest = line.slice(end, Math.max(end, firstDate)).replace(/[-–—.,;:]+\s*$/, "").trim();
-    if (rest.split(" ").length > 3 || !/\p{L}{2}/u.test(rest)) rest = "";
-    position = (canonPos(pm[2]) || line.slice(posStart, end)) + (rest ? " " + rest : "");
-    const after = line.slice(posStart, firstDate);
-    if (!gender){
-      const gm = /(?:^|\s)(Nam|Nữ)(?=\s|$)/.exec(after);
-      if (gm){ gender = gm[1]; genderSrc = "report"; position = position.replace(/\s*(Nam|Nữ)\s*$/, "").trim(); }
-    }
-  } else notes.push("Không nhận diện được chức vụ");
-
-  let appoint = "-", dismiss = "-";
-  if (dates[0]){ const d = normDate(dates[0][1], dates[0][2], dates[0][3]); appoint = d.text; if (!d.ok) notes.push("Ngày bổ nhiệm có thể sai"); }
-  if (dates[1]){ const d = normDate(dates[1][1], dates[1][2], dates[1][3]); dismiss = d.text; if (!d.ok) notes.push("Ngày miễn nhiệm có thể sai"); }
-  if (!dates.length) notes.push("Không đọc được ngày bổ nhiệm");
+  // phân loại ngày theo từ khóa đứng trước, nếu không có thì theo thứ tự
+  let appoint = null, dismiss = null;
+  const notes = [];
+  for (const d of dates){
+    const before = fb.slice(Math.max(0, d.index - 30), d.index);
+    const nd = normDate(d[1], d[2], d[3]);
+    if (!nd.ok) notes.push("Ngày " + nd.text + " có thể sai");
+    if (DISMISS_KW.test(before) && !dismiss) dismiss = nd.text;
+    else if (APPOINT_KW.test(before) && !appoint) appoint = nd.text;
+    else if (!appoint) appoint = nd.text;
+    else if (!dismiss) dismiss = nd.text;
+  }
   if (dates.length > 2) notes.push("Dòng có hơn 2 ngày, kiểm tra lại");
 
-  const words = name.split(/\s+/).filter(Boolean);
-  while (words.length > 2 && !/\p{L}{2}/u.test(words[0])) words.shift();
-  if (words.length && SURNAMES[fold(words[0])]) words[0] = SURNAMES[fold(words[0])];
-  if (words.length < 2 || words.length > 6 || /\d/.test(name)) notes.push("Họ tên có thể đọc sai");
-  name = words.map(w => w.charAt(0).toLocaleUpperCase("vi") + w.slice(1)).join(" ");
+  // tên & chức vụ
+  let nameWords = [], position = "";
+  if (pm){
+    const ps = pm.index + pm[1].length, pe = ps + pm[2].length;
+    const before = body.slice(0, ps), after = body.slice(pe);
+    nameWords = nameRun(before);
+    if (nameWords.length < 2){                       // chức vụ đứng trước tên
+      const w2 = nameRun(after.replace(/^[\s:,\-–—]+/, "").replace(HONOR_RE, m => { if (!gender){ gender = /^b/.test(fold(m)) ? "Nữ" : "Nam"; genderSrc = "report"; } return ""; }));
+      if (w2.length >= 2) nameWords = w2;
+    }
+    let rest = after;
+    const cut = fold(rest).search(STOP_KW); if (cut >= 0) rest = rest.slice(0, cut);
+    rest = rest.replace(/[-–—.,;:]+\s*$/, "").trim();
+    if (nameWords.length && fold(rest).includes(fold(nameWords[0]))) rest = "";
+    const gm = /(?:^|\s)(Nam|Nữ)(?=\s|$)/.exec(rest);
+    if (gm){ if (!gender){ gender = gm[1]; genderSrc = "report"; } rest = rest.replace(gm[0], "").trim(); }
+    if (rest.split(" ").length > 3 || !/\p{L}{2}/u.test(rest) || !/^(\p{Lu}|độc|thường)/u.test(rest)) rest = "";
+    position = (canonPos(pm[2]) || body.slice(ps, pe)) + (rest ? " " + rest : "");
+  } else {
+    nameWords = nameRun(body);
+  }
 
-  return { name, position, appoint, dismiss, gender, genderSrc, notes };
+  const plausible = nameWords.length >= 2 && nameWords.length <= 6;
+  // dòng chỉ có ngày (VD "Bổ nhiệm ngày 20/4/2023" xuống dòng) -> gắn vào dòng trước
+  if (!plausible && dates.length && !pm && /(bo nhiem|mien nhiem|tu nhiem|tu ngay|den ngay)/.test(fb))
+    return { dateOnly: true, appoint, dismiss, notes };
+  if (!plausible) return null;
+  if (!pm && !dates.length) return null;
+  if (!pm) notes.push("Không nhận diện được chức vụ");
+
+  if (SURNAMES[fold(nameWords[0])]) nameWords[0] = SURNAMES[fold(nameWords[0])];
+  const name = nameWords.map(w => w.charAt(0).toLocaleUpperCase("vi") + w.slice(1).toLocaleLowerCase("vi")).join(" ");
+  return { name, position, appoint: appoint || "-", dismiss: dismiss || "-", gender, genderSrc, notes,
+           strong: !!(numM || hm || dates.length) };
+}
+
+function groupFromPosition(pos, hasHDTV){
+  const p = fold(pos);
+  if (/kiem soat|truong ban|bks/.test(p)) return NHOM[2];
+  if (/giam doc|ke toan|phu trach ke toan/.test(p)) return NHOM[3];
+  if (/hdtv|hoi dong thanh vien/.test(p)) return NHOM[1];
+  return hasHDTV ? NHOM[1] : NHOM[0];
 }
 
 function guessGender(name){
@@ -270,7 +314,7 @@ function findMeta(allLines, fileName){
   for (const { text } of allLines){
     const f = fold(text);
     if (!meta.ma){
-      const m = /ma (?:chung khoan|ck|co phieu)(?: (?:la|:))?\s*:?\s*["“]?([a-z0-9]{3})(?![a-z0-9])/.exec(f);
+      const m = /ma (?:chung khoan|ck|co phieu|giao dich)(?: (?:la|:))?\s*:?\s*["“]?([a-z0-9]{3})(?![a-z0-9])/.exec(f);
       if (m) meta.ma = m[1].toUpperCase();
     }
     if (!meta.nam){
@@ -278,32 +322,47 @@ function findMeta(allLines, fileName){
       if (m) meta.nam = +m[1];
     }
     if (!meta.cty){
-      const m = /^cong ty co phan\s+(.{3,})$/.exec(f.trim());
+      const m = /^cong ty (?:co phan|tnhh(?: mot thanh vien| mtv)?)\s+(.{3,})$/.exec(f.trim());
       if (m){ const t = clean(text); meta.cty = t.slice(t.length - m[1].length).trim(); }
     }
   }
   // dự phòng theo tên file, VD AAM_Baocaotaichinh_2014_Kiemtoan.pdf
-  const base = fileName.replace(/\.pdf$/i, "");
+  const base = fileName.replace(/\.pdf$/i, "").replace(/^[0-9a-f]{8}-/, "");
   if (!meta.ma){ const m = /^([A-Za-z0-9]{3})(?=[_\-\s.])/.exec(base); if (m) meta.ma = m[1].toUpperCase(); }
   if (!meta.nam){ const m = /(?:^|\D)((?:19|20)\d{2})(?:\D|$)/.exec(base); if (m) meta.nam = +m[1]; }
   if (meta.cty){ const c = meta.cty.toLowerCase(); meta.cty = c.charAt(0).toUpperCase() + c.slice(1); }
   return meta;
 }
 
-/* Gom các dòng OCR thành bản ghi */
+/* Gom các dòng chữ thành bản ghi */
 function extract(pages, fileName){
   const allLines = pages.flatMap(p => p.lines.map(l => ({ ...l, page: p.page })));
   const meta = findMeta(allLines, fileName);
+  const hasHDTV = allLines.some(l => /hoi dong thanh vien/.test(fold(l.text)));
   const out = [];
-  let group = null, miss = 0, orderInFile = 0;
+  let group = null, miss = 0, orderInFile = 0, last = null;
   for (const l of allLines){
     const g = detectGroup(l.text);
-    if (g){ group = g; miss = 0; continue; }
-    if (!group) continue;
+    if (g){ group = g; miss = 0; last = null; continue; }
     const r = parseRow(l.text);
-    if (!r){ if (++miss >= 4 && out.some(o => o.nhom === group)) group = null; continue; }
+    if (r && r.dateOnly){
+      if (last && last.page === l.page){
+        if (r.appoint && last.ngay_bo_nhiem === "-") last.ngay_bo_nhiem = r.appoint;
+        else if (r.appoint && last.ngay_mien_nhiem === "-" && !r.dismiss) last.ngay_mien_nhiem = r.appoint;
+        if (r.dismiss && last.ngay_mien_nhiem === "-") last.ngay_mien_nhiem = r.dismiss;
+      }
+      continue;
+    }
+    // ngoài vùng có tiêu đề nhóm: chỉ nhận dòng chắc chắn (có STT/Ông/Bà/ngày + chức vụ)
+    if (!r || (!group && !(r.strong && r.position))){
+      if (group && ++miss >= 5 && out.some(o => o.nhom === group)) group = null;
+      if (!r) last = null;
+      continue;
+    }
     miss = 0;
     const notes = [...r.notes];
+    const nhom = group || groupFromPosition(r.position, hasHDTV);
+    if (!group) notes.push("Nhóm suy ra từ chức vụ – cần kiểm tra");
     let gioi = r.gender;
     if (!gioi){
       gioi = guessGender(r.name);
@@ -312,13 +371,14 @@ function extract(pages, fileName){
     if (l.conf < LOW_CONF) notes.push("OCR độ tin cậy thấp (" + Math.round(l.conf) + "%)");
     if (!meta.ma) notes.push("Chưa nhận diện được mã CK");
     if (!meta.nam) notes.push("Chưa nhận diện được năm");
-    const flagged = notes.some(n => !/^Giới tính do hệ thống/.test(n)) || !r.gender;
-    out.push(newRow({
-      ma: meta.ma, ten_cong_ty: meta.cty, nam_bctc: meta.nam, nhom: group, ho_ten: r.name, chuc_vu: r.position,
+    last = newRow({
+      ma: meta.ma, ten_cong_ty: meta.cty, nam_bctc: meta.nam, nhom, ho_ten: r.name, chuc_vu: r.position,
       gioi_tinh: gioi, ngay_bo_nhiem: r.appoint, ngay_mien_nhiem: r.dismiss, ghi_chu: notes.join("; "),
-      can_kiem_tra: flagged, ten_file: fileName, trang_nguon: l.page, thu_tu: ++orderInFile
-    }));
+      can_kiem_tra: notes.length > 0, ten_file: fileName, trang_nguon: l.page, thu_tu: ++orderInFile, page: l.page
+    });
+    out.push(last);
   }
+  out.forEach(o => delete o.page);
   return { meta, rows: out };
 }
 
@@ -336,8 +396,7 @@ function getWorker(){
   return workerPromise;
 }
 
-async function renderPage(pdf, n){
-  const page = await pdf.getPage(n);
+async function renderPage(page){
   const vp1 = page.getViewport({ scale: 1 });
   const scale = Math.min(3, 2400 / Math.max(vp1.width, vp1.height));
   const vp = page.getViewport({ scale });
@@ -346,8 +405,43 @@ async function renderPage(pdf, n){
   const ctx = c.getContext("2d");
   ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
   await page.render({ canvasContext: ctx, viewport: vp }).promise;
-  page.cleanup();
   return c;
+}
+
+// PDF có sẵn lớp chữ (không phải scan): lấy chữ trực tiếp, chính xác 100%, không cần OCR
+async function textLayerLines(page){
+  const tc = await page.getTextContent();
+  const items = tc.items.filter(i => i.str && i.str.trim()).map(i => ({ s: i.str, x: i.transform[4], y: i.transform[5], w: i.width, h: Math.abs(i.transform[3]) || 10 }));
+  if (!items.length) return null;
+  items.sort((a, b) => b.y - a.y || a.x - b.x);
+  const rowsY = [];
+  for (const it of items){
+    const r = rowsY.find(r => Math.abs(r.y - it.y) < Math.max(3, it.h * 0.45));
+    if (r) r.items.push(it); else rowsY.push({ y: it.y, items: [it] });
+  }
+  const lines = rowsY.sort((a, b) => b.y - a.y).map(r => {
+    r.items.sort((a, b) => a.x - b.x);
+    let t = "", end = null;
+    for (const it of r.items){
+      if (end !== null){ const gap = it.x - end; t += gap > it.h * 1.2 ? "   " : gap > it.h * 0.15 ? " " : ""; }
+      t += it.s; end = it.x + it.w;
+    }
+    return { text: t.normalize("NFC"), conf: 100 };
+  });
+  const all = fold(lines.map(l => l.text).join(" "));
+  // bỏ qua nếu chữ bị lỗi font (VD bảng mã TCVN3/VNI) hoặc quá ít chữ
+  if (all.replace(/\s/g, "").length < 80 || !/(cong ty|bao cao|hoi dong|giam doc|tai chinh)/.test(all)) return null;
+  return lines;
+}
+
+function parsePages(spec, total){
+  const set = new Set();
+  for (const part of String(spec || "").split(/[,;\s]+/).filter(Boolean)){
+    const m = /^(\d+)(?:-(\d+))?$/.exec(part); if (!m) continue;
+    const a = +m[1], b = m[2] ? +m[2] : a;
+    for (let i = Math.max(1, a); i <= Math.min(total, b); i++) set.add(i);
+  }
+  return set.size ? [...set].sort((a, b) => a - b) : Array.from({ length: Math.min(10, total) }, (_, i) => i + 1);
 }
 
 const queue = [];
@@ -383,26 +477,33 @@ async function runQueue(){
 async function processFile({ file, el }){
   const msg = t => el.querySelector(".msg").textContent = t;
   const bar = el.querySelector("progress");
-  msg("Đang tải bộ nhận dạng chữ tiếng Việt…");
-  const worker = await getWorker();
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-  const maxP = Math.max(1, Math.min(+$("maxPages").value || 10, pdf.numPages));
+  const list = parsePages($("maxPages").value, pdf.numPages);
   const pages = [];
-  let foundAny = false;
-  for (let n = 1; n <= maxP; n++){
-    msg("Đang đọc trang " + n + "/" + maxP + "…");
-    bar.value = (n - 1) / maxP;
-    const canvas = await renderPage(pdf, n);
-    const { data } = await worker.recognize(canvas);
-    const lines = (data.lines || []).map(l => ({ text: l.text.replace(/\n/g, " "), conf: l.confidence }));
-    pages.push({ page: n, lines });
-    // chỉ giữ ảnh trang có nội dung nhân sự để xem đối chiếu
-    const pageHasRows = extract([{ page: n, lines }], file.name).rows.length > 0 ||
-                        lines.some(l => detectGroup(l.text));
-    if (pageHasRows) pageImages[file.name + "#" + n] = canvas.toDataURL("image/jpeg", 0.7);
-    // dừng sớm: đã có dữ liệu ở trang trước, trang này không còn
-    const sofar = extract(pages, file.name);
-    if (sofar.rows.length && foundAny && !pageHasRows) break;
+  let foundAny = false, ocrCount = 0;
+  for (let i = 0; i < list.length; i++){
+    const n = list[i];
+    bar.value = i / list.length;
+    const page = await pdf.getPage(n);
+    let lines = await textLayerLines(page), canvas = null, src = "chữ có sẵn";
+    if (!lines){
+      msg("Đang tải bộ nhận dạng chữ tiếng Việt…");
+      const worker = await getWorker();
+      msg("Đang OCR trang " + n + " (" + (i + 1) + "/" + list.length + ")…");
+      canvas = await renderPage(page);
+      const { data } = await worker.recognize(canvas);
+      lines = (data.lines || []).map(l => ({ text: l.text.replace(/\n/g, " "), conf: l.confidence }));
+      src = "OCR"; ocrCount++;
+    } else msg("Đang đọc trang " + n + " (" + (i + 1) + "/" + list.length + ")…");
+    pages.push({ page: n, lines, src });
+    const pageHasRows = extract([{ page: n, lines }], file.name).rows.length > 0 || lines.some(l => detectGroup(l.text));
+    if (pageHasRows){
+      if (!canvas) canvas = await renderPage(page);
+      pageImages[file.name + "#" + n] = canvas.toDataURL("image/jpeg", 0.7);
+    }
+    page.cleanup();
+    // dừng sớm: trang trước đã có dữ liệu, trang này không còn
+    if (foundAny && !pageHasRows && extract(pages, file.name).rows.length) break;
     if (pageHasRows) foundAny = true;
   }
   pdf.destroy();
@@ -410,9 +511,15 @@ async function processFile({ file, el }){
   const { meta, rows: found } = extract(pages, file.name);
   const added = mergeRows(found);
   el.classList.add(found.length ? "done" : "err");
+  const how = ocrCount ? `OCR ${ocrCount} trang` : "PDF có sẵn chữ";
   msg(found.length
-    ? `Xong: ${meta.ma || "?"} – ${meta.nam || "?"} · ${found.length} dòng (${added} dòng mới) · quét ${pages.length} trang`
-    : `Không tìm thấy bảng nhân sự trong ${pages.length} trang đầu. Thử tăng số trang hoặc nhập tay.`);
+    ? `Xong: ${meta.ma || "?"} – ${meta.nam || "?"} · ${found.length} dòng (${added} dòng mới) · quét ${pages.length} trang (${how})`
+    : `Không tìm thấy nhân sự trong ${pages.length} trang đã quét (${how}). Bấm "Xem chữ đọc được" để kiểm tra, hoặc đổi trang cần quét.`);
+  // xem chữ đọc được từng trang (để kiểm tra khi trích xuất sai)
+  const det = document.createElement("details");
+  det.innerHTML = '<summary class="small" style="cursor:pointer">Xem chữ đọc được</summary><textarea readonly rows="12" style="font-size:12px;margin-top:6px"></textarea>';
+  det.querySelector("textarea").value = pages.map(p => `===== Trang ${p.page} (${p.src}) =====\n` + p.lines.map(l => l.text).join("\n")).join("\n\n");
+  el.appendChild(det);
 }
 
 /* ================= Dữ liệu bảng ================= */
