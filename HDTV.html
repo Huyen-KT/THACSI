@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trích xuất nhân sự quản trị</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#fff; --line:#dde1e6; --text:#1d2430; --muted:#667085;
+  --accent:#1f6feb; --accent-ink:#fff; --warn:#fff4c2; --warn-line:#e8c84a; --ok:#1a7f37; --err:#c62828;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14171c; --panel:#1c2027; --line:#2e343d; --text:#e6e8eb; --muted:#9aa3ae;
+    --accent:#4c8dff; --accent-ink:#fff; --warn:#4a3f12; --warn-line:#8a7520; --ok:#4ac26b; --err:#ff6b6b;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14171c; --panel:#1c2027; --line:#2e343d; --text:#e6e8eb; --muted:#9aa3ae;
+  --accent:#4c8dff; --accent-ink:#fff; --warn:#4a3f12; --warn-line:#8a7520; --ok:#4ac26b; --err:#ff6b6b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+header .stats{color:var(--muted);font-size:13px;margin-left:auto}
+main{display:grid;grid-template-columns:320px minmax(0,1fr);gap:16px;padding:16px 20px}
+main>section,main>aside{min-width:0}
+@media (max-width:900px){main{grid-template-columns:1fr;padding:12px 16px}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px}
+.card h2{font-size:14px;margin:0 0 10px}
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+input,select,textarea{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:6px;padding:7px 12px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#drop{border:2px dashed var(--line);border-radius:10px;padding:22px 12px;text-align:center;color:var(--muted);cursor:pointer}
+#drop.over{border-color:var(--accent);color:var(--accent)}
+.file{border-top:1px solid var(--line);padding:8px 0;font-size:13px}
+.file .name{font-weight:600;word-break:break-all}
+.file .msg{color:var(--muted);font-size:12px}
+.file.err .msg{color:var(--err)} .file.done .msg{color:var(--ok)}
+progress{width:100%;height:6px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.toolbar select,.toolbar input{width:auto}
+.tablewrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:1300px;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:2px 4px;text-align:left;vertical-align:top}
+th{position:sticky;top:0;background:var(--panel);z-index:1;padding:6px 4px;font-size:12px}
+td input,td select{border:1px solid transparent;background:transparent;padding:4px 5px;border-radius:4px}
+td input:focus,td select:focus{border-color:var(--accent);background:var(--bg);outline:none}
+tr.flag td{background:var(--warn)}
+tr.sel td{outline:2px solid var(--accent);outline-offset:-2px}
+td.num{color:var(--muted);text-align:right;padding-top:7px;white-space:nowrap}
+td.act button{padding:2px 7px}
+#preview img{width:100%;border:1px solid var(--line);border-radius:6px}
+#preview .hint{color:var(--muted);font-size:12px}
+.small{font-size:12px;color:var(--muted)}
+#status{font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Trích xuất nhân sự quản trị từ BCTC</h1>
+  <span class="stats" id="stats"></span>
+</header>
+<main>
+<aside>
+  <div class="card">
+    <h2>1. Tải PDF lên</h2>
+    <div id="drop">Kéo thả file PDF vào đây<br>hoặc bấm để chọn (nhiều file)</div>
+    <input type="file" id="fileInput" accept="application/pdf" multiple hidden>
+    <label for="maxPages">Số trang tối đa cần quét mỗi file</label>
+    <input type="number" id="maxPages" min="1" max="200" value="10">
+    <p class="small">PDF chỉ được đọc trên máy bạn, không tải lên server và không được lưu lại.</p>
+    <div id="files"></div>
+  </div>
+  <div class="card">
+    <h2>Xem trang nguồn</h2>
+    <div id="preview"><p class="hint">Bấm vào một dòng trong bảng để xem ảnh trang PDF chứa dòng đó.</p></div>
+  </div>
+  <div class="card">
+    <h2>Kết nối Supabase</h2>
+    <label for="sbUrl">Project URL</label>
+    <input id="sbUrl" placeholder="https://xxxx.supabase.co">
+    <label for="sbKey">Anon key</label>
+    <input id="sbKey" type="password" placeholder="eyJhbGciOi...">
+    <div class="row" style="margin-top:10px">
+      <button id="sbSave">Lưu kết nối</button>
+      <span class="small" id="sbState"></span>
+    </div>
+    <p class="small">Nếu chưa kết nối, dữ liệu vẫn được giữ tạm trên trình duyệt này và vẫn xuất Excel được.</p>
+  </div>
+</aside>
+<section>
+  <div class="card">
+    <h2>2. Kiểm tra và sửa dữ liệu</h2>
+    <div class="toolbar">
+      <select id="fMa"><option value="">Tất cả mã</option></select>
+      <select id="fNam"><option value="">Tất cả năm</option></select>
+      <select id="fNhom"><option value="">Tất cả nhóm</option></select>
+      <label class="row" style="margin:0;color:var(--text)"><input type="checkbox" id="fFlag" style="width:auto"> Chỉ dòng cần kiểm tra</label>
+      <input id="fText" placeholder="Tìm họ tên..." style="min-width:160px">
+    </div>
+    <div class="toolbar">
+      <button id="addRow">+ Thêm dòng</button>
+      <button id="dbLoad">Tải từ Supabase</button>
+      <button id="dbSave">Lưu vào Supabase</button>
+      <button class="primary" id="exportXlsx">Xuất Excel</button>
+      <button id="clearAll">Xóa bảng</button>
+      <span id="status"></span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>STT</th><th>STT công ty</th><th style="width:70px">Mã</th><th style="width:170px">Tên công ty</th><th style="width:70px">Năm BCTC</th>
+          <th style="width:170px">Nhóm</th><th style="width:190px">Họ và tên</th><th style="width:140px">Chức vụ</th><th style="width:80px">Giới tính</th>
+          <th style="width:110px">Ngày bổ nhiệm</th><th style="width:110px">Ngày miễn nhiệm</th><th style="width:260px">Ghi chú</th><th>Cần KT</th><th>Trang</th><th></th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <p class="small">Dòng tô vàng là dòng cần kiểm tra lại. Khi đã kiểm tra xong, bỏ dấu ở cột "Cần KT".</p>
+  </div>
+</section>
+</main>
+
+<script>
+"use strict";
+/* ================= Cấu hình ================= */
+const NHOM = ["Hội đồng quản trị", "Hội đồng thành viên", "Ban kiểm soát", "Ban điều hành, quản lý"];
+const TABLE = "nhan_su";
+const KEY_COLS = "ma,nam_bctc,ho_ten,chuc_vu,ngay_bo_nhiem";
+const LOW_CONF = 70;
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+/* ================= Trạng thái ================= */
+let rows = [];            // dữ liệu bảng
+let deletedIds = [];      // id đã xóa, chờ xóa trên Supabase
+const pageImages = {};    // "tenfile#trang" -> dataURL (chỉ giữ trong phiên)
+let selectedUid = null;
+let uidSeq = 1;
+const $ = id => document.getElementById(id);
+
+function store(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+function load(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
+
+/* ================= Chuẩn hóa chữ ================= */
+// Bỏ dấu từng ký tự, giữ nguyên độ dài để ánh xạ vị trí về chuỗi gốc
+function fold(s){
+  let out = "";
+  for (const ch of s.normalize("NFC")){
+    let c = ch.normalize("NFD").replace(/[̀-ͯ]/g, "");
+    if (c === "đ") c = "d"; else if (c === "Đ") c = "D";
+    out += (c.length === 1 ? c : ch).toLowerCase();
+  }
+  return out;
+}
+function clean(s){ return s.normalize("NFC").replace(/[|_—–]+/g, " ").replace(/\s+/g, " ").trim(); }
+function titleCase(s){ return s.toLowerCase().replace(/(^|\s)(\S)/g, (m, a, b) => a + b.toUpperCase()); }
+
+/* ================= Nhận diện ================= */
+const POSITIONS_VI = [
+  "Phó Chủ tịch Hội đồng quản trị","Chủ tịch Hội đồng quản trị","Phó Chủ tịch HĐQT","Chủ tịch HĐQT",
+  "Phó Chủ tịch HĐTV","Chủ tịch HĐTV","Phó Chủ tịch","Chủ tịch",
+  "Thành viên HĐQT độc lập","Thành viên độc lập","Thành viên HĐQT","Thành viên HĐTV","Thành viên BKS","Thành viên Ban kiểm soát","Thành viên",
+  "Ủy viên HĐQT","Ủy viên","Trưởng Ban kiểm soát","Trưởng BKS","Trưởng ban","Kiểm soát viên",
+  "Phó Tổng Giám đốc thường trực","Phó Tổng Giám đốc","Tổng Giám đốc","Phó Giám đốc","Giám đốc tài chính","Giám đốc",
+  "Kế toán trưởng","Phụ trách kế toán","Người phụ trách quản trị","Thư ký HĐQT","Thư ký"
+];
+const POSITIONS = POSITIONS_VI.map(fold);
+const POS_RE = new RegExp("(^|[^a-z])(" + POSITIONS.map(p => p.replace(/ /g, "\\s+")).join("|") + ")(?![a-z])");
+const canonPos = m => { const i = POSITIONS.indexOf(m.replace(/\s+/g, " ")); return i < 0 ? null : POSITIONS_VI[i]; };
+// họ phổ biến: sửa lỗi mất dấu của OCR ở chữ đầu tiên
+const SURNAMES = Object.fromEntries(["Nguyễn","Trần","Lê","Phạm","Hoàng","Huỳnh","Phan","Vũ","Võ","Đặng","Bùi","Đỗ","Hồ","Ngô","Dương","Lý","Lương","Đinh","Đoàn","Trịnh","Lâm","Phùng","Mai","Tô","Hà","Cao","Châu","Tạ","Tăng","Thái","Quách","Kiều","Văn","Từ","Lưu","Đào","Đàm","Triệu","La","Mạc","Âu","Diệp","Khúc","Vương","Tiêu","Hứa","Lục","Nghiêm","Trương"].map(x => [fold(x), x]));
+// bỏ số thứ tự đầu dòng, kể cả khi OCR đọc "1." thành "l„", "Ì.."
+const NUM_RE = /^\s*(?:\d{1,2}|[lIiÌìíỉ|])\s*[.,„…:)]+\s*/;
+// ngày: "15 tháng 3 năm 2008" hoặc "15/03/2008"
+const DATE_RE = /(\d{1,2})\s*(?:th[a-z]{0,4}\.?|\/|-|\.)\s*(\d{1,2})\s*(?:n[a-z]{0,2}\.?|\/|-|\.)\s*((?:19|20)\d{2})/g;
+
+function detectGroup(line){
+  let t = fold(line).replace(/^\s*(?:[ivx]+|\d+|[a-e])\s*[.)/-]\s*/, "").split(/\s+/).filter(Boolean);
+  const junk = w => !/[a-z]{2}/.test(w);
+  while (t.length && junk(t[t.length - 1])) t.pop();
+  while (t.length && junk(t[0])) t.shift();
+  const f = t.join(" ").replace(/[:.,;]+$/, "");
+  if (/\d/.test(f) || f.length > 60) return null;
+  const tests = [
+    [/^(hoi dong quan tri|hdqt)$/, NHOM[0]],
+    [/^hoi dong thanh vien$/, NHOM[1]],
+    [/^(ban kiem soat|bks|kiem soat vien)$/, NHOM[2]],
+    [/^(ban (tong )?giam doc|ban dieu hanh|ban dieu hanh,? (va )?quan ly|ban (tong )?giam doc (va|,) ke toan truong|ban quan ly|ban dieu hanh (va|,) ke toan truong|ke toan truong)$/, NHOM[3]],
+  ];
+  for (const [re, g] of tests) if (re.test(f)) return g;
+  return null;
+}
+
+function normDate(d, m, y){
+  d = +d; m = +m; y = +y;
+  const ok = d >= 1 && d <= 31 && m >= 1 && m <= 12;
+  return { text: String(d).padStart(2, "0") + "/" + String(m).padStart(2, "0") + "/" + y, ok };
+}
+
+// Phân tích 1 dòng bảng nhân sự. Trả về null nếu không phải dòng dữ liệu.
+function parseRow(lineText){
+  const line = clean(lineText);
+  const f = fold(line);
+  if (/ho va ten|chuc vu|ngay bo nhiem/.test(f)) return null;
+  const hasNum = NUM_RE.test(line);
+  const pm = POS_RE.exec(f);
+  const dates = [...f.matchAll(DATE_RE)];
+  if (!pm && !(hasNum && dates.length)) return null;
+  if (!hasNum && !pm) return null;
+  if (!hasNum && !dates.length && !/(^|\s)[-–—.]\s*$/.test(line)) return null;
+
+  const notes = [];
+  const posStart = pm ? pm.index + pm[1].length : (dates.length ? dates[0].index : line.length);
+  let name = line.slice(0, posStart).replace(NUM_RE, "").replace(/[,.;:\-]+\s*$/, "").trim();
+  let gender = "", genderSrc = "";
+  const g = /^(ông|bà)\s+/i.exec(name);
+  if (g){ gender = fold(g[1]) === "ong" ? "Nam" : "Nữ"; genderSrc = "report"; name = name.slice(g[0].length).trim(); }
+
+  const firstDate = dates.length ? dates[0].index : line.length;
+  let position = "";
+  if (pm){
+    // chức vụ chuẩn hóa theo danh mục (sửa lỗi dấu của OCR) + phần đuôi ngắn nếu có
+    const end = posStart + pm[2].length;
+    let rest = line.slice(end, Math.max(end, firstDate)).replace(/[-–—.,;:]+\s*$/, "").trim();
+    if (rest.split(" ").length > 3 || !/\p{L}{2}/u.test(rest)) rest = "";
+    position = (canonPos(pm[2]) || line.slice(posStart, end)) + (rest ? " " + rest : "");
+    const after = line.slice(posStart, firstDate);
+    if (!gender){
+      const gm = /(?:^|\s)(Nam|Nữ)(?=\s|$)/.exec(after);
+      if (gm){ gender = gm[1]; genderSrc = "report"; position = position.replace(/\s*(Nam|Nữ)\s*$/, "").trim(); }
+    }
+  } else notes.push("Không nhận diện được chức vụ");
+
+  let appoint = "-", dismiss = "-";
+  if (dates[0]){ const d = normDate(dates[0][1], dates[0][2], dates[0][3]); appoint = d.text; if (!d.ok) notes.push("Ngày bổ nhiệm có thể sai"); }
+  if (dates[1]){ const d = normDate(dates[1][1], dates[1][2], dates[1][3]); dismiss = d.text; if (!d.ok) notes.push("Ngày miễn nhiệm có thể sai"); }
+  if (!dates.length) notes.push("Không đọc được ngày bổ nhiệm");
+  if (dates.length > 2) notes.push("Dòng có hơn 2 ngày, kiểm tra lại");
+
+  const words = name.split(/\s+/).filter(Boolean);
+  while (words.length > 2 && !/\p{L}{2}/u.test(words[0])) words.shift();
+  if (words.length && SURNAMES[fold(words[0])]) words[0] = SURNAMES[fold(words[0])];
+  if (words.length < 2 || words.length > 6 || /\d/.test(name)) notes.push("Họ tên có thể đọc sai");
+  name = words.map(w => w.charAt(0).toLocaleUpperCase("vi") + w.slice(1)).join(" ");
+
+  return { name, position, appoint, dismiss, gender, genderSrc, notes };
+}
+
+function guessGender(name){
+  const ws = name.split(/\s+/);
+  const mid = ws.slice(1, -1).map(fold);
+  const thi = ws.slice(1, -1).some(w => w.toLowerCase() === "thị") || mid.includes("thi");
+  const van = ws.slice(1, -1).some(w => w.toLowerCase() === "văn");
+  if (thi && !van) return "Nữ";
+  if (van && !thi) return "Nam";
+  return "";
+}
+
+function findMeta(allLines, fileName){
+  const meta = { ma: "", nam: null, cty: "" };
+  for (const { text } of allLines){
+    const f = fold(text);
+    if (!meta.ma){
+      const m = /ma (?:chung khoan|ck|co phieu)(?: (?:la|:))?\s*:?\s*["“]?([a-z0-9]{3})(?![a-z0-9])/.exec(f);
+      if (m) meta.ma = m[1].toUpperCase();
+    }
+    if (!meta.nam){
+      const m = /(?:nam tai chinh|ket thuc ngay|cho nam|bao cao tai chinh nam)[^\d]{0,40}(?:\d{1,2}\D{1,10}\d{1,2}\D{1,10})?((?:19|20)\d{2})/.exec(f);
+      if (m) meta.nam = +m[1];
+    }
+    if (!meta.cty){
+      const m = /^cong ty co phan\s+(.{3,})$/.exec(f.trim());
+      if (m){ const t = clean(text); meta.cty = t.slice(t.length - m[1].length).trim(); }
+    }
+  }
+  // dự phòng theo tên file, VD AAM_Baocaotaichinh_2014_Kiemtoan.pdf
+  const base = fileName.replace(/\.pdf$/i, "");
+  if (!meta.ma){ const m = /^([A-Za-z0-9]{3})(?=[_\-\s.])/.exec(base); if (m) meta.ma = m[1].toUpperCase(); }
+  if (!meta.nam){ const m = /(?:^|\D)((?:19|20)\d{2})(?:\D|$)/.exec(base); if (m) meta.nam = +m[1]; }
+  if (meta.cty){ const c = meta.cty.toLowerCase(); meta.cty = c.charAt(0).toUpperCase() + c.slice(1); }
+  return meta;
+}
+
+/* Gom các dòng OCR thành bản ghi */
+function extract(pages, fileName){
+  const allLines = pages.flatMap(p => p.lines.map(l => ({ ...l, page: p.page })));
+  const meta = findMeta(allLines, fileName);
+  const out = [];
+  let group = null, miss = 0, orderInFile = 0;
+  for (const l of allLines){
+    const g = detectGroup(l.text);
+    if (g){ group = g; miss = 0; continue; }
+    if (!group) continue;
+    const r = parseRow(l.text);
+    if (!r){ if (++miss >= 4 && out.some(o => o.nhom === group)) group = null; continue; }
+    miss = 0;
+    const notes = [...r.notes];
+    let gioi = r.gender;
+    if (!gioi){
+      gioi = guessGender(r.name);
+      notes.push(gioi ? "Giới tính do hệ thống phán đoán – cần kiểm tra" : "Chưa xác định giới tính");
+    }
+    if (l.conf < LOW_CONF) notes.push("OCR độ tin cậy thấp (" + Math.round(l.conf) + "%)");
+    if (!meta.ma) notes.push("Chưa nhận diện được mã CK");
+    if (!meta.nam) notes.push("Chưa nhận diện được năm");
+    const flagged = notes.some(n => !/^Giới tính do hệ thống/.test(n)) || !r.gender;
+    out.push(newRow({
+      ma: meta.ma, ten_cong_ty: meta.cty, nam_bctc: meta.nam, nhom: group, ho_ten: r.name, chuc_vu: r.position,
+      gioi_tinh: gioi, ngay_bo_nhiem: r.appoint, ngay_mien_nhiem: r.dismiss, ghi_chu: notes.join("; "),
+      can_kiem_tra: flagged, ten_file: fileName, trang_nguon: l.page, thu_tu: ++orderInFile
+    }));
+  }
+  return { meta, rows: out };
+}
+
+/* ================= OCR ================= */
+let workerPromise = null;
+function getWorker(){
+  if (!workerPromise){
+    workerPromise = Tesseract.createWorker("vie", 1, {
+      workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js",
+      corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1",
+      langPath: "https://cdn.jsdelivr.net/npm/@tesseract.js-data/vie@1.0.0/4.0.0_best_int",
+    }).then(async w => { await w.setParameters({ preserve_interword_spaces: "1", tessedit_pageseg_mode: "6" }); return w; });
+    workerPromise.catch(() => { workerPromise = null; });
+  }
+  return workerPromise;
+}
+
+async function renderPage(pdf, n){
+  const page = await pdf.getPage(n);
+  const vp1 = page.getViewport({ scale: 1 });
+  const scale = Math.min(3, 2400 / Math.max(vp1.width, vp1.height));
+  const vp = page.getViewport({ scale });
+  const c = document.createElement("canvas");
+  c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  page.cleanup();
+  return c;
+}
+
+const queue = [];
+let busy = false;
+function enqueue(files){
+  for (const f of files){
+    if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") continue;
+    const el = document.createElement("div");
+    el.className = "file";
+    el.innerHTML = '<div class="name"></div><progress max="1" value="0"></progress><div class="msg">Đang chờ…</div>';
+    el.querySelector(".name").textContent = f.name;
+    $("files").prepend(el);
+    queue.push({ file: f, el });
+  }
+  runQueue();
+}
+
+async function runQueue(){
+  if (busy) return;
+  busy = true;
+  while (queue.length){
+    const job = queue.shift();
+    try { await processFile(job); }
+    catch (e){
+      console.error(e);
+      job.el.classList.add("err");
+      job.el.querySelector(".msg").textContent = "Lỗi: " + (e && e.message ? e.message : e);
+    }
+  }
+  busy = false;
+}
+
+async function processFile({ file, el }){
+  const msg = t => el.querySelector(".msg").textContent = t;
+  const bar = el.querySelector("progress");
+  msg("Đang tải bộ nhận dạng chữ tiếng Việt…");
+  const worker = await getWorker();
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const maxP = Math.max(1, Math.min(+$("maxPages").value || 10, pdf.numPages));
+  const pages = [];
+  let foundAny = false;
+  for (let n = 1; n <= maxP; n++){
+    msg("Đang đọc trang " + n + "/" + maxP + "…");
+    bar.value = (n - 1) / maxP;
+    const canvas = await renderPage(pdf, n);
+    const { data } = await worker.recognize(canvas);
+    const lines = (data.lines || []).map(l => ({ text: l.text.replace(/\n/g, " "), conf: l.confidence }));
+    pages.push({ page: n, lines });
+    // chỉ giữ ảnh trang có nội dung nhân sự để xem đối chiếu
+    const pageHasRows = extract([{ page: n, lines }], file.name).rows.length > 0 ||
+                        lines.some(l => detectGroup(l.text));
+    if (pageHasRows) pageImages[file.name + "#" + n] = canvas.toDataURL("image/jpeg", 0.7);
+    // dừng sớm: đã có dữ liệu ở trang trước, trang này không còn
+    const sofar = extract(pages, file.name);
+    if (sofar.rows.length && foundAny && !pageHasRows) break;
+    if (pageHasRows) foundAny = true;
+  }
+  pdf.destroy();
+  bar.value = 1;
+  const { meta, rows: found } = extract(pages, file.name);
+  const added = mergeRows(found);
+  el.classList.add(found.length ? "done" : "err");
+  msg(found.length
+    ? `Xong: ${meta.ma || "?"} – ${meta.nam || "?"} · ${found.length} dòng (${added} dòng mới) · quét ${pages.length} trang`
+    : `Không tìm thấy bảng nhân sự trong ${pages.length} trang đầu. Thử tăng số trang hoặc nhập tay.`);
+}
+
+/* ================= Dữ liệu bảng ================= */
+function newRow(o){
+  return Object.assign({ uid: uidSeq++, id: null, ma: "", ten_cong_ty: "", nam_bctc: null, nhom: NHOM[0], ho_ten: "", chuc_vu: "",
+    gioi_tinh: "", ngay_bo_nhiem: "-", ngay_mien_nhiem: "-", ghi_chu: "", can_kiem_tra: false, ten_file: "", trang_nguon: null, thu_tu: 0 }, o);
+}
+const keyOf = r => [r.ma, r.nam_bctc, fold(r.ho_ten || ""), fold(r.chuc_vu || ""), r.ngay_bo_nhiem].join("|");
+function mergeRows(list){
+  const have = new Set(rows.map(keyOf));
+  let n = 0;
+  for (const r of list){ const k = keyOf(r); if (!have.has(k)){ rows.push(r); have.add(k); n++; } }
+  save(); render();
+  return n;
+}
+function save(){ store("qt_rows", rows); store("qt_deleted", deletedIds); }
+
+const nhomIdx = n => { const i = NHOM.indexOf(n); return i < 0 ? 9 : i; };
+function sorted(){
+  const s = [...rows].sort((a, b) =>
+    (a.ma || "~").localeCompare(b.ma || "~") || (a.nam_bctc || 0) - (b.nam_bctc || 0) ||
+    nhomIdx(a.nhom) - nhomIdx(b.nhom) || (a.thu_tu || 0) - (b.thu_tu || 0) || a.uid - b.uid);
+  const cos = [...new Set(s.map(r => r.ma || ""))];
+  s.forEach((r, i) => { r._stt = i + 1; r._sttCty = cos.indexOf(r.ma || "") + 1; });
+  return s;
+}
+
+function refreshFilters(){
+  const fill = (sel, vals, label) => {
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">${label}</option>` + vals.map(v => `<option>${esc(v)}</option>`).join("");
+    sel.value = vals.map(String).includes(cur) ? cur : "";
+  };
+  fill($("fMa"), [...new Set(rows.map(r => r.ma).filter(Boolean))].sort(), "Tất cả mã");
+  fill($("fNam"), [...new Set(rows.map(r => r.nam_bctc).filter(Boolean))].sort(), "Tất cả năm");
+  fill($("fNhom"), NHOM, "Tất cả nhóm");
+}
+function esc(s){ return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function render(){
+  refreshFilters();
+  const fm = $("fMa").value, fn = $("fNam").value, fg = $("fNhom").value, ff = $("fFlag").checked, ft = fold($("fText").value.trim());
+  const list = sorted().filter(r => (!fm || r.ma === fm) && (!fn || String(r.nam_bctc) === fn) && (!fg || r.nhom === fg) &&
+    (!ff || r.can_kiem_tra) && (!ft || fold(r.ho_ten || "").includes(ft)));
+  const inp = (r, k, w) => `<input data-k="${k}" value="${esc(r[k])}"${w ? ` style="width:${w}px"` : ""}>`;
+  $("tbody").innerHTML = list.map(r => `
+    <tr data-uid="${r.uid}" class="${r.can_kiem_tra ? "flag" : ""}${r.uid === selectedUid ? " sel" : ""}">
+      <td class="num">${r._stt}</td><td class="num">${r._sttCty}</td>
+      <td>${inp(r, "ma")}</td><td>${inp(r, "ten_cong_ty")}</td><td>${inp(r, "nam_bctc")}</td>
+      <td><select data-k="nhom">${NHOM.map(n => `<option${n === r.nhom ? " selected" : ""}>${n}</option>`).join("")}</select></td>
+      <td>${inp(r, "ho_ten")}</td><td>${inp(r, "chuc_vu")}</td>
+      <td><select data-k="gioi_tinh">${["", "Nam", "Nữ"].map(n => `<option${n === (r.gioi_tinh || "") ? " selected" : ""}>${n}</option>`).join("")}</select></td>
+      <td>${inp(r, "ngay_bo_nhiem")}</td><td>${inp(r, "ngay_mien_nhiem")}</td><td>${inp(r, "ghi_chu")}</td>
+      <td style="text-align:center"><input type="checkbox" data-k="can_kiem_tra" style="width:auto;margin-top:6px"${r.can_kiem_tra ? " checked" : ""}></td>
+      <td class="num">${r.trang_nguon ?? ""}</td>
+      <td class="act"><button data-del title="Xóa dòng">✕</button></td>
+    </tr>`).join("");
+  const companies = new Set(rows.map(r => r.ma + "|" + r.nam_bctc)).size;
+  $("stats").textContent = `${rows.length} dòng · ${companies} báo cáo · ${rows.filter(r => r.can_kiem_tra).length} dòng cần kiểm tra`;
+}
+
+$("tbody").addEventListener("change", e => {
+  const tr = e.target.closest("tr"); if (!tr) return;
+  const r = rows.find(x => x.uid === +tr.dataset.uid); const k = e.target.dataset.k; if (!r || !k) return;
+  if (k === "can_kiem_tra") r[k] = e.target.checked;
+  else if (k === "nam_bctc") r[k] = e.target.value.trim() ? +e.target.value.trim() || null : null;
+  else r[k] = e.target.value.trim();
+  if (k === "ngay_bo_nhiem" || k === "ngay_mien_nhiem") r[k] = r[k] || "-";
+  save();
+  if (k === "can_kiem_tra" || k === "ma" || k === "nam_bctc" || k === "nhom") render();
+});
+$("tbody").addEventListener("click", e => {
+  const tr = e.target.closest("tr"); if (!tr) return;
+  const uid = +tr.dataset.uid;
+  if (e.target.matches("[data-del]")){
+    const r = rows.find(x => x.uid === uid);
+    if (r && r.id) deletedIds.push(r.id);
+    rows = rows.filter(x => x.uid !== uid); save(); render(); return;
+  }
+  if (selectedUid !== uid){
+    selectedUid = uid;
+    document.querySelectorAll("tr.sel").forEach(t => t.classList.remove("sel")); tr.classList.add("sel");
+    showPreview(rows.find(x => x.uid === uid));
+  }
+});
+function showPreview(r){
+  const p = $("preview");
+  if (!r){ p.innerHTML = ""; return; }
+  const img = pageImages[r.ten_file + "#" + r.trang_nguon];
+  const cap = `<p class="small">${esc(r.ten_file || "Nhập tay")}${r.trang_nguon ? " · trang " + r.trang_nguon : ""}</p>`;
+  p.innerHTML = img ? cap + `<a href="${img}" target="_blank" rel="noopener"><img src="${img}" alt="Trang nguồn"></a>`
+    : cap + `<p class="hint">Không có ảnh trang (PDF không được lưu). Mở file gốc trên máy để đối chiếu.</p>`;
+}
+["fMa", "fNam", "fNhom", "fFlag"].forEach(id => $(id).addEventListener("change", render));
+$("fText").addEventListener("input", render);
+$("addRow").onclick = () => {
+  const last = sorted().at(-1) || {};
+  rows.push(newRow({ ma: last.ma || "", ten_cong_ty: last.ten_cong_ty || "", nam_bctc: last.nam_bctc || null, can_kiem_tra: true, ghi_chu: "Nhập tay", thu_tu: 9999 }));
+  save(); render();
+};
+$("clearAll").onclick = () => {
+  if (!rows.length || !confirm("Xóa toàn bộ bảng trên trình duyệt này? (Dữ liệu đã lưu trên Supabase không bị xóa)")) return;
+  rows = []; deletedIds = []; save(); render(); showPreview(null);
+};
+
+/* ================= Tải file ================= */
+const drop = $("drop");
+drop.onclick = () => $("fileInput").click();
+$("fileInput").onchange = e => { enqueue([...e.target.files]); e.target.value = ""; };
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); enqueue([...e.dataTransfer.files]); });
+
+/* ================= Supabase ================= */
+let sb = null;
+function connect(){
+  const url = $("sbUrl").value.trim(), key = $("sbKey").value.trim();
+  sb = url && key ? supabase.createClient(url, key, { auth: { persistSession: false } }) : null;
+  $("sbState").textContent = sb ? "Đã cấu hình" : "Chưa kết nối";
+}
+$("sbSave").onclick = () => { store("qt_sb", { url: $("sbUrl").value.trim(), key: $("sbKey").value.trim() }); connect(); };
+const status = t => $("status").textContent = t;
+const DB_COLS = ["ma","ten_cong_ty","nam_bctc","nhom","ho_ten","chuc_vu","gioi_tinh","ngay_bo_nhiem","ngay_mien_nhiem","ghi_chu","can_kiem_tra","ten_file","trang_nguon","thu_tu"];
+const toDb = r => Object.fromEntries(DB_COLS.map(k => [k, r[k] ?? null]));
+
+$("dbSave").onclick = async () => {
+  if (!sb) return status("Chưa kết nối Supabase.");
+  status("Đang lưu…");
+  try{
+    if (deletedIds.length){
+      const { error } = await sb.from(TABLE).delete().in("id", deletedIds); if (error) throw error;
+      deletedIds = [];
+    }
+    const old = rows.filter(r => r.id), fresh = rows.filter(r => !r.id);
+    if (old.length){
+      const { error } = await sb.from(TABLE).upsert(old.map(r => ({ id: r.id, ...toDb(r) })), { onConflict: "id" }); if (error) throw error;
+    }
+    for (let i = 0; i < fresh.length; i += 500){
+      const chunk = fresh.slice(i, i + 500);
+      const { data, error } = await sb.from(TABLE).upsert(chunk.map(toDb), { onConflict: KEY_COLS }).select("id," + KEY_COLS);
+      if (error) throw error;
+      const byKey = new Map(data.map(d => [keyOf(d), d.id]));
+      chunk.forEach(r => { r.id = byKey.get(keyOf(r)) ?? r.id; });
+    }
+    save(); status(`Đã lưu ${rows.length} dòng vào Supabase.`);
+  }catch(e){ status("Lỗi lưu: " + (e.message || e)); }
+};
+$("dbLoad").onclick = async () => {
+  if (!sb) return status("Chưa kết nối Supabase.");
+  status("Đang tải…");
+  try{
+    let all = [], from = 0;
+    for (;;){
+      const { data, error } = await sb.from(TABLE).select("*").order("id").range(from, from + 999);
+      if (error) throw error;
+      all = all.concat(data); if (data.length < 1000) break; from += 1000;
+    }
+    const byId = new Map(rows.filter(r => r.id).map(r => [r.id, r]));
+    const unsaved = rows.filter(r => !r.id);
+    rows = all.map(d => newRow({ ...toDb(d), id: d.id, uid: byId.get(d.id)?.uid ?? uidSeq++ }));
+    mergeRows(unsaved);
+    status(`Đã tải ${all.length} dòng từ Supabase.`);
+  }catch(e){ status("Lỗi tải: " + (e.message || e)); }
+};
+
+/* ================= Xuất Excel ================= */
+$("exportXlsx").onclick = async () => {
+  if (!rows.length) return status("Chưa có dữ liệu.");
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Nhân sự");
+  const head = ["STT","STT công ty","Mã","Tên công ty","Năm BCTC","Nhóm","Họ và tên","Chức vụ","Giới tính","Ngày bổ nhiệm","Ngày miễn nhiệm","Ghi chú"];
+  ws.columns = [6,11,8,24,10,22,26,18,10,15,15,48].map(w => ({ width: w }));
+  ws.addRow(head).eachCell(c => { c.font = { bold: true }; c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E2F3" } }; c.border = { bottom: { style: "thin" } }; });
+  for (const r of sorted()){
+    const row = ws.addRow([r._stt, r._sttCty, r.ma, r.ten_cong_ty, r.nam_bctc, r.nhom, r.ho_ten, r.chuc_vu, r.gioi_tinh,
+      r.ngay_bo_nhiem || "-", r.ngay_mien_nhiem || "-", r.ghi_chu]);
+    row.getCell(10).numFmt = "@"; row.getCell(11).numFmt = "@";
+    if (r.can_kiem_tra) row.eachCell({ includeEmpty: true }, c => c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } });
+  }
+  ws.views = [{ state: "frozen", ySplit: 1 }];
+  ws.autoFilter = { from: "A1", to: "L1" };
+  const buf = await wb.xlsx.writeBuffer();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+  a.download = "nhan-su-quan-tri_" + new Date().toISOString().slice(0, 10) + ".xlsx";
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  status(`Đã xuất ${rows.length} dòng.`);
+};
+
+/* ================= Khởi động ================= */
+rows = load("qt_rows", []).map(r => newRow({ ...r, uid: uidSeq++ }));
+deletedIds = load("qt_deleted", []);
+const cfg = load("qt_sb", {});
+$("sbUrl").value = cfg.url || ""; $("sbKey").value = cfg.key || "";
+connect(); render();
+</script>
+</body>
+</html>
